@@ -1,5 +1,5 @@
 /**
- * LULAEDGE MAGIC SCRIPT v6.6 - Smart Discovery Edition
+ * LULAEDGE MAGIC SCRIPT v1.0
  */
 "use strict";
 

@@ -92,8 +92,7 @@ Your Cloudflare Account
 
 ## Limits (Free / Beta)
 
-- 50 queries/day to the Engine
-- 100 rows in pagination UI
+- 50 queries/day
 - 100 shards
 
 ---
