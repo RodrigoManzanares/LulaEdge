@@ -1,5 +1,5 @@
 /**
- * LULAEDGE ORCHESTRATOR v6.4
+ * LULAEDGE ORCHESTRATOR v1.0
  */
 
 const JWKS_CACHE = new Map();

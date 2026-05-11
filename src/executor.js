@@ -1,5 +1,5 @@
 /**
- * LULAEDGE EXECUTOR v6.5
+ * LULAEDGE EXECUTOR v1.0
  */
 
 async function runIntrospection(db) {
