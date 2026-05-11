@@ -73,8 +73,21 @@ function assembleBlindly(action, phase1Data, phase2Results, masterMatch, shardMa
 
   if (action === "concat") return flatPhase2;
 
+  // ✨ FIX MATEMÁTICO: Ahora el orquestador entiende sum, min y max
   if (action === "sum") {
-      let t = 0; flatPhase2.forEach(d => t += Number(d.val || 0)); return [{ val: t }];
+      let t = 0;
+      flatPhase2.forEach(d => t += Number(d.val || 0));
+      return [{ val: t }];
+  }
+
+  if (action === "min") {
+      const values = flatPhase2.map(d => Number(d.val)).filter(v => !isNaN(v));
+      return [{ val: values.length ? Math.min(...values) : null }];
+  }
+
+  if (action === "max") {
+      const values = flatPhase2.map(d => Number(d.val)).filter(v => !isNaN(v));
+      return [{ val: values.length ? Math.max(...values) : null }];
   }
 
   if (action === "map_merge") {
@@ -167,9 +180,6 @@ export default {
           introspect: instruction.introspect,
           client_geo: clientGeo
         };
-
-        return callExecutor(env, instruction.binding, payload, instruction.timeout);
-
 
         return callExecutor(env, instruction.binding, payload, instruction.timeout);
       });
