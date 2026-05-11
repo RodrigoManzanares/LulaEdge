@@ -1,0 +1,31 @@
+{
+  "name": "lulaEdge",
+  "version": "2.0.0",
+  "description": "Enterprise D1 Fan-out CLI. Managed by ShardMaster SaaS.",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "scan": "node scripts/scan-bindings.js",
+    "deploy-all": "node scripts/deploy-all.js",
+    "deploy:magico": "npm run scan && npm run deploy-all",
+    "clean": "rm -f wrangler-executor-*.toml wrangler-orchestrator.toml",
+    "login": "npx wrangler login"
+  },
+  "keywords": [
+    "cloudflare",
+    "d1",
+    "sharding",
+    "fan-out",
+    "serverless"
+  ],
+  "author": "Tu Empresa",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.3.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.71.0"
+  }
+}
