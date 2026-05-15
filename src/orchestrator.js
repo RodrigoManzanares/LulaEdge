@@ -1,5 +1,6 @@
 /**
- * LULAEDGE ORCHESTRATOR v1.0
+ * LULAEDGE ORCHESTRATOR v1.1 - Alter Update
+ * ─────────────────────────────────────────────────────────────────
  */
 
 const JWKS_CACHE = new Map();
@@ -18,7 +19,16 @@ async function verifySignature(plan, env) {
     key = await crypto.subtle.importKey("jwk", JSON.parse(env.ENGINE_PUB_KEY), { name: "Ed25519" }, false, ["verify"]);
     JWKS_CACHE.set('engine_key', key);
   }
-  const data = { cache_key: plan.cache_key, phase_1: plan.phase_1, phase_2: plan.phase_2, assembly: plan.assembly };
+
+  const data = {
+      strategy: plan.strategy,
+      target_table: plan.target_table,
+      cache_key: plan.cache_key,
+      phase_1: plan.phase_1,
+      phase_2: plan.phase_2,
+      assembly: plan.assembly
+  };
+
   const sigBytes = base64ToUint8(plan.signature);
   return crypto.subtle.verify("Ed25519", key, sigBytes, new TextEncoder().encode(JSON.stringify(data)));
 }
@@ -73,7 +83,6 @@ function assembleBlindly(action, phase1Data, phase2Results, masterMatch, shardMa
 
   if (action === "concat") return flatPhase2;
 
-  // ✨ FIX MATEMÁTICO: Ahora el orquestador entiende sum, min y max
   if (action === "sum") {
       let t = 0;
       flatPhase2.forEach(d => t += Number(d.val || 0));
@@ -99,6 +108,21 @@ function assembleBlindly(action, phase1Data, phase2Results, masterMatch, shardMa
       });
   }
 
+  if (action === "migration_summary") {
+      return [{
+          total_shards_targeted: phase2Results.length,
+          success_count: phase2Results.filter(r => r.success).length,
+          fail_count: phase2Results.filter(r => !r.success).length,
+          failed_shards: phase2Results.filter(r => !r.success).map(r => r.shard),
+          details: phase2Results.map(r => ({
+              shard: r.shard,
+              status: r.success ? "OK" : "ERROR",
+              error: r.err || null,
+              latency_ms: r.ms
+          }))
+      }];
+  }
+
   return [];
 }
 
@@ -114,16 +138,16 @@ export default {
       country: req.cf?.country || 'UNK'
     };
 
-    const sendLogAsync = (shardsHit, ms, planId) => {
+    const sendLogAsync = (shardsHit, ms, planId, strategy, table) => {
       if (env.TRUSTED_ENGINE_URL) {
         ctx.waitUntil(
           fetch(`${env.TRUSTED_ENGINE_URL}/log`, {
             method: "POST",
             headers: {
-                "Content-Type": "application/json",
-                "X-LulaEdge-Key": req.headers.get("X-LulaEdge-Key") || ""
+              "Content-Type": "application/json",
+              "X-LulaEdge-Key": req.headers.get("X-LulaEdge-Key") || ""
             },
-            body: JSON.stringify({ s: shardsHit, t: ms, p: planId })
+            body: JSON.stringify({ s: shardsHit, t: ms, p: planId, st: strategy, tb: table })
           }).catch(e => console.error("❌ LOG ERROR:", e.message))
         );
       }
@@ -146,7 +170,7 @@ export default {
           cachedRes.headers.set("X-Lula-Cache", "HIT");
           Object.entries(cors).forEach(([k,v]) => cachedRes.headers.set(k,v));
 
-          sendLogAsync(0, Math.round(performance.now() - tStart), plan.plan_id);
+          sendLogAsync(0, Math.round(performance.now() - tStart), plan.plan_id, plan.strategy, plan.target_table);
 
           return cachedRes;
       }
@@ -178,7 +202,8 @@ export default {
           d1_binding: instruction.d1_binding,
           cat_id: instruction.cat_id,
           introspect: instruction.introspect,
-          client_geo: clientGeo
+          client_geo: clientGeo,
+          is_migration: plan.assembly?.action === "migration_summary"
         };
 
         return callExecutor(env, instruction.binding, payload, instruction.timeout);
@@ -207,7 +232,7 @@ export default {
 
       const totalMs = Math.round(performance.now() - tStart);
 
-      sendLogAsync(phase2Results.length, totalMs, plan.plan_id);
+      sendLogAsync(phase2Results.length, totalMs, plan.plan_id, plan.strategy, plan.target_table);
 
       const finalResponse = Response.json({
         results: finalResult,

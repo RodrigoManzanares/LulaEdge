@@ -1,5 +1,6 @@
 /**
- * LULAEDGE EXECUTOR v1.0
+ * LULAEDGE EXECUTOR v1.1 - Alter Update
+ * ─────────────────────────────────────────────────────────────────
  */
 
 async function runIntrospection(db) {
@@ -20,6 +21,7 @@ export default {
     const sql = body.sql;
     const params = body.params || [];
     const shouldIntrospect = body.introspect === true;
+    const isMigration = body.is_migration === true;
 
     if (!d1Binding || !env[d1Binding]) {
       return Response.json({ successes: [], failures: [{ shard: catId, error: "BINDING_ERROR" }] });
@@ -45,27 +47,51 @@ export default {
             },
             body: JSON.stringify({ cat_id: catId, schema: schema, geo: geoInfo })
           });
-        } catch (e) { }
+        } catch (e) { console.error("Introspection Error:", e); }
       })());
     }
 
     try {
-      const result = await db.prepare(sql).bind(...params).all();
+      let resultData = [];
+      let execDuration = 0;
+      let note = null;
+
+      if (isMigration) {
+        try {
+          const res = await db.prepare(sql).bind(...params).run();
+          execDuration = res.meta?.duration || 0;
+        } catch (migErr) {
+          const errMsg = (migErr.message || "").toLowerCase();
+          if (errMsg.includes("duplicate column name")) {
+            note = "Columna ya existía (Idempotent Success)";
+          } else {
+            throw migErr;
+          }
+        }
+      } else {
+        const res = await db.prepare(sql).bind(...params).all();
+        resultData = res.results || [];
+        execDuration = res.meta?.duration || 0;
+      }
 
       return Response.json({
         successes: [{
           shard: catId,
-          data: result.results || [],
+          data: resultData,
           meta: {
-            duration: Math.max(1, Math.round(result.meta?.duration || 0)),
-            introspected: shouldIntrospect
+            duration: Math.max(1, Math.round(execDuration)),
+            introspected: shouldIntrospect,
+            warning: note
           }
         }],
         failures: []
       });
 
     } catch (err) {
-      return Response.json({ successes: [], failures: [{ shard: catId, error: "EXECUTION_ERROR" }] });
+      return Response.json({
+        successes: [],
+        failures: [{ shard: catId, error: err.message || "EXECUTION_ERROR" }]
+      });
     }
   }
 };
