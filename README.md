@@ -1,21 +1,35 @@
 # LulaEdge
 
-**Distributed SQL orchestration for Cloudflare D1 — plug and play edge sharding.**
+**Query hundreds of Cloudflare D1 databases as if they were a single relational system**
 
-Query across hundreds of D1 databases as if they were one, with intelligent routing.
+**LulaEdge orchestrates distributed SQL execution entirely inside your Cloudflare account using Cloudflare Workers**
 
 ---
 
+# Why LulaEdge?
+
+- Keep data geographically local
+- Query globally across shards
+- Avoid centralized Postgres infrastructure
+- Built entirely on Cloudflare Workers
+- Designed for multi-tenant and AI workloads
+---
 ## How it works
 
-LulaEdge has two parts:
-
-- **Engine** (hosted by LulaEdge) — generates cryptographically signed query plans. Never touches your data.
-- **Your cluster** (deployed by this script) — Orchestrator + Executors live in your Cloudflare account. Only they talk to your D1 shards.
+- **Engine** The LulaEdge engine only generates signed execution plans. Data queries execute entirely inside your Cloudflare account.
+- **Your cluster** (deployed by this script) --> Orchestrator + Executors live in your Cloudflare account. Only they talk to your D1 shards.
 
 ```
 Your App → Engine (sign plan) → Orchestrator (execute) → Executors → D1 Shards
 ```
+
+```
+sql
+SELECT region, SUM(revenue)
+FROM tenant_orders
+GROUP BY region
+```
+Execute across 100+ distributed D1 shards in parallel.
 
 ---
 
@@ -48,7 +62,7 @@ npm install
 ### 3. Deploy
 
 ```bash
-node scripts/magic.js
+node scripts/deploy.js
 ```
 
 That's it. The script will:
