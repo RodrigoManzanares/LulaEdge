@@ -81,12 +81,13 @@ Go to **[lulaedgeui.pages.dev](https://lulaedgeui.pages.dev)** and paste your or
 
 ## Strategies
 
-| Strategy  | What it does                                             |
-|-----------|----------------------------------------------------------|
-| `join`    | Fetch rows from master DB, look them up across all shards |
-| `agg`     | SUM / AVG / COUNT / MIN / MAX across all shards          |
-| `scatter` | Broadcast a SELECT to all shards and collect results     |
-| `migrate` | Add / Rename column across all shards                    |
+| Strategy    | What it does                                                                     |
+|-------------|----------------------------------------------------------------------------------|
+| `join`      | Fetch rows from master DB, look them up across all shards                        |
+| `agg`       | SUM / AVG / COUNT / MIN / MAX across all shards                                  |
+| `scatter`   | Broadcast a SELECT to all shards and collect results                             |
+| `migrate`   | Add / Rename column across all shards                                            |
+| `telemetry` | Get global telemetry across all shards checking the Capacity, Status, Latency... |
 ---
 
 ## Architecture

@@ -1,5 +1,5 @@
 /**
- * LULAEDGE ORCHESTRATOR v1.1 - Alter Update
+ * LULAEDGE ORCHESTRATOR v1.2 - Telemetry
  * ─────────────────────────────────────────────────────────────────
  */
 
@@ -61,16 +61,19 @@ async function callExecutor(env, binding, payload, timeoutMs) {
         };
     }
 
-    const executorGeo = body.successes?.[0]?.meta || body.meta || {};
+    const execMeta = body.successes?.[0]?.meta || body.meta || {};
 
     return {
       success: true,
       data: body.successes?.[0]?.data || [],
       shard: payload.cat_id,
       ms: Math.round(performance.now() - t0),
-      lat: executorGeo.lat,
-      lon: executorGeo.lon,
-      colo: executorGeo.colo
+      lat: execMeta.lat,
+      lon: execMeta.lon,
+      colo: execMeta.colo,
+      rows: execMeta.rows ?? payload.known_rows ?? 0,
+      rows_source: execMeta.rows_source ?? payload.known_source ?? 'exact',
+      health: execMeta.health || 100
     };
   } catch (e) {
     clearTimeout(tid);
@@ -123,6 +126,28 @@ function assembleBlindly(action, phase1Data, phase2Results, masterMatch, shardMa
       }];
   }
 
+  if (action === "discovery_summary") {
+      return phase2Results.map(r => ({
+          shard: r.shard,
+          status: r.success ? "ONLINE" : "OFFLINE",
+          rows: r.rows || 0,
+          rows_source: r.rows_source || 'exact',
+          health: r.health || 100,
+          latency_ms: r.ms,
+          colo: r.colo || "UNK",
+          error: r.err || null
+      }));
+  }
+
+  if (action === "mutation_result") {
+      return phase2Results.map(r => ({
+          shard: r.shard,
+          mutation_success: r.success,
+          latency_ms: r.ms,
+          error: r.err || null
+      }));
+  }
+
   return [];
 }
 
@@ -159,20 +184,24 @@ export default {
 
       if (!(await verifySignature(plan, env))) return new Response("UNAUTHORIZED", { status: 401, headers: cors });
 
+      const isLiveStrategy = plan.assembly?.action === "discovery_summary" || plan.assembly?.action === "mutation_result";
+
       const cacheUrl = new URL(req.url);
       cacheUrl.pathname = `/cache/${plan.cache_key}`;
       const cacheReq = new Request(cacheUrl.toString());
       const cache = caches.default;
 
-      let response = await cache.match(cacheReq);
-      if (response) {
-          const cachedRes = new Response(response.body, response);
-          cachedRes.headers.set("X-Lula-Cache", "HIT");
-          Object.entries(cors).forEach(([k,v]) => cachedRes.headers.set(k,v));
+      if (!isLiveStrategy) {
+        let response = await cache.match(cacheReq);
+        if (response) {
+            const cachedRes = new Response(response.body, response);
+            cachedRes.headers.set("X-Lula-Cache", "HIT");
+            Object.entries(cors).forEach(([k,v]) => cachedRes.headers.set(k,v));
 
-          sendLogAsync(0, Math.round(performance.now() - tStart), plan.plan_id, plan.strategy, plan.target_table);
+            sendLogAsync(0, Math.round(performance.now() - tStart), plan.plan_id, plan.strategy, plan.target_table);
 
-          return cachedRes;
+            return cachedRes;
+        }
       }
 
       let phase1Data = [];
@@ -196,6 +225,8 @@ export default {
             finalParams = [...phase1Keys, ...finalParams];
         }
 
+        const isModifyingQuery = plan.assembly?.action === "migration_summary" || instruction.is_migration === true;
+
         const payload = {
           sql: finalSql,
           params: finalParams,
@@ -203,7 +234,9 @@ export default {
           cat_id: instruction.cat_id,
           introspect: instruction.introspect,
           client_geo: clientGeo,
-          is_migration: plan.assembly?.action === "migration_summary"
+          is_migration: isModifyingQuery,
+          known_rows: instruction.known_rows,
+          known_source: instruction.known_source
         };
 
         return callExecutor(env, instruction.binding, payload, instruction.timeout);
@@ -217,7 +250,7 @@ export default {
           ms: r.ms,
           success: r.success,
           err: r.err,
-          val: r.data[0]?.val,
+          val: r.rows,
           colo: r.colo
         };
       });
@@ -231,34 +264,16 @@ export default {
       );
 
       const totalMs = Math.round(performance.now() - tStart);
-
       sendLogAsync(phase2Results.length, totalMs, plan.plan_id, plan.strategy, plan.target_table);
 
       const finalResponse = Response.json({
         results: finalResult,
         telemetry,
         shards_hit: phase2Results.length,
-        plan_id: plan.plan_id,
-        geo: {
-          client: clientGeo,
-          shards: phase2Results.map(r => {
-            const baseLat = parseFloat(clientGeo.lat) || 0;
-            const baseLon = parseFloat(clientGeo.lon) || 0;
-
-            const lat = r.lat != null ? r.lat : (baseLat + (Math.random() - 0.5) * 2);
-            const lon = r.lon != null ? r.lon : (baseLon + (Math.random() - 0.5) * 2);
-
-            return {
-              id: r.shard,
-              lat: lat,
-              lon: lon,
-              colo: (r.colo && r.colo !== "UNK") ? r.colo : clientGeo.colo
-            };
-          })
-        }
+        plan_id: plan.plan_id
       }, { headers: cors });
 
-      if (plan.ttl_ms > 0) {
+      if (plan.ttl_ms > 0 && !isLiveStrategy) {
           const cacheRes = finalResponse.clone();
           cacheRes.headers.set("Cache-Control", `s-maxage=${Math.floor(plan.ttl_ms / 1000)}`);
           ctx.waitUntil(cache.put(cacheReq, cacheRes).catch(()=>{}));
@@ -267,7 +282,7 @@ export default {
       return finalResponse;
 
     } catch (e) {
-      return new Response("EXECUTION_ERROR", { status: 500, headers: cors });
+      return new Response(JSON.stringify({error: e.message}), { status: 500, headers: cors });
     }
   }
 };
