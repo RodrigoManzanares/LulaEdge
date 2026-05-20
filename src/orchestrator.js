@@ -270,7 +270,23 @@ export default {
         results: finalResult,
         telemetry,
         shards_hit: phase2Results.length,
-        plan_id: plan.plan_id
+        plan_id: plan.plan_id,
+        geo: {
+          client: clientGeo,
+          shards: phase2Results.map(r => {
+            const baseLat = parseFloat(clientGeo.lat) || 40.4168;
+            const baseLon = parseFloat(clientGeo.lon) || -3.7038;
+            const lat = r.lat != null ? r.lat : (baseLat + (Math.random() - 0.5) * 2);
+            const lon = r.lon != null ? r.lon : (baseLon + (Math.random() - 0.5) * 2);
+
+            return {
+              id: r.shard,
+              lat: lat,
+              lon: lon,
+              colo: (r.colo && r.colo !== "UNK") ? r.colo : clientGeo.colo
+            };
+          })
+        }
       }, { headers: cors });
 
       if (plan.ttl_ms > 0 && !isLiveStrategy) {
