@@ -97,12 +97,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 
     } else if (name === "execute_cluster_query") {
-      // 1. Validación imperativa solo para el caso crítico de migraciones
       if (args.strategy === "migration" && !args.migration_config) {
         throw new Error("Validation Error: The 'migration' strategy strictly requires a 'migration_config' object.");
       }
 
-      // 2. Construcción limpia del Payload para el Engine
       const payloadData = {
         strategy: args.strategy,
         shard_table: args.shard_table,
