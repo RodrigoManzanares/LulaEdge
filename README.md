@@ -116,3 +116,54 @@ Your Cloudflare Account
 
 - **Your data never leaves your account.** Executors talk only to your D1 shards.
 
+# LulaEdge MCP Server (Model Context Protocol)
+
+An MCP server that bridges AI tools (like **Cursor Desktop** or **Claude Desktop**) with the **LulaEdge** distributed shard architecture. It allows LLMs to inspect cluster health, auto-generate plans, and execute queries or migrations using natural language.
+
+---
+
+### 🛠️ Cursor Desktop Configuration
+
+1. Open **Cursor Desktop** and navigate to **Settings** (`Ctrl + ,` or `Cmd + ,`).
+2. Go to **Features** > **MCP**.
+3. Click **+ Add New MCP Server** and fill in the fields:
+  * **Name:** `LulaEdge`
+  * **Type:** `stdio`
+  * **Command:** `node` (or `bun` / `npx`)
+  * **Args:** Absolute path to your compiled file (e.g., `/Users/path/to/lulaedge-mcp/build/index.js`)
+
+### 🔑 Required Environment Variables
+Ensure these are set in your environment or passed as environment args in Cursor:
+* `LULA_API_KEY`: Your private LulaEdge access key.
+* `LULA_ORCHESTRATOR_URL`: Endpoint of your Cloudflare Worker Orchestrator.
+---
+
+### 🧰 Available Tools
+
+The schema enforces strict validation (`additionalProperties: false`) to eliminate LLM hallucinations.
+
+### 1. `get_fleet_status`
+* **Description:** Retrieves real-time health, size, and latency metrics for all shards.
+* **Prompts:** *"Show me the cluster health"* or *"Are any shards down?"*
+
+### 2. `execute_cluster_query`
+* **Description:** Runs distributed operations across the cluster. Supports `scatter`, `agg`, `join`, and `migration` strategies.
+* **Prompts:** * *"Run a scatter strategy on table local_stock."* (Engine auto-generates the base SQL).
+  * *"Calculate the SUM aggregate of the field 'price' on 'local_stock'."*
+  * *"Add a column 'discount' (INT) to table 'products' using a migration."* (Enforces strict `migration_config` structure).
+
+---
+
+### 🛑 Structured Error Handling
+
+When an operation fails, the server responds with a structured JSON object so the LLM can pinpoint the exact lifecycle failure state (`phase`) and self-correct when applicable:
+
+```json
+{
+  "status": "failed",
+  "mcp_contract": "1.1.0",
+  "phase": "engine_plan_generation",
+  "error": {
+    "type": "LulaEdgeFlowError",
+    "message": "Engine Plan Rejection [Status 403]: Invalid API Key"
+  }
