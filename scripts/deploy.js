@@ -1,5 +1,5 @@
 /**
- * LULAEDGE MAGIC SCRIPT v1.0
+ * LULAEDGE MAGIC SCRIPT v1.3 - The Fabric & DO Update
  */
 "use strict";
 
@@ -132,7 +132,7 @@ async function run() {
         process.exit(1);
     }
 
-    console.log(`\n🔍 Searching local data bases (Filtro: '${SHARD_PREFIX}')...`);
+    console.log(`\n🔍 Searching local databases (Filter: '${SHARD_PREFIX}')...`);
     const { result: allDBs } = await cfApi("/d1/database?per_page=100");
     const shardCandidates = allDBs.filter(db => db.name.includes(SHARD_PREFIX));
 
@@ -166,7 +166,7 @@ async function run() {
         }
     }
 
-    console.log(`\n\n Asking about Architecture deployment...`);
+    console.log(`\n\n Asking Engine about Architecture deployment...`);
 
     const fetchHeaders = { "Content-Type": "application/json" };
     if (INSTALL_TOKEN) fetchHeaders["Authorization"] = `Bearer ${INSTALL_TOKEN}`;
@@ -190,7 +190,7 @@ async function run() {
     }
 
     const { manifest, api_key } = engineResponse;
-    console.log(`✅ License validated`);
+    console.log(`✅ License & Manifest validated`);
 
     if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
 
@@ -218,13 +218,13 @@ async function run() {
         const tomlPath = path.join(CONFIG_DIR, `wrangler-${exec.name}.toml`);
         fs.writeFileSync(tomlPath, execToml);
 
-        console.log(`\n⚙️  Deploying ${exec.name} ( using Smart Placement)...`);
+        console.log(`\n⚙️  Deploying ${exec.name} (using Smart Placement)...`);
         deployWorker(tomlPath);
         putSecret(exec.name, "LULAEDGE_API_KEY", api_key, tomlPath);
         await delay(1500);
     }
 
-    console.log("\n Deploying Orchestrator...");
+    console.log("\n🚀 Deploying Orchestrator and provisioning Durable Objects Namespace...");
     let orchToml = manifest.orchestrator_toml;
     if (!orchToml.includes("[vars]")) orchToml += `\n[vars]\n`;
     orchToml += `TRUSTED_ENGINE_URL = "${ENGINE_URL}"\n`;
@@ -241,12 +241,11 @@ async function run() {
 
     saveConfig({ api_key, email: userEmail, orchestrator_url: orchestratorUrl });
 
-    // 🔥 NUEVO: Bloque de salida final con credenciales claras para el usuario
     console.log("\n  ╔════════════════════════════════════════════════════════╗");
     console.log("  ║ 🎉 LULAEDGE INFRASTRUCTURE DEPLOYED SUCCESSFULLY 🎉    ║");
     console.log("  ╚════════════════════════════════════════════════════════╝\n");
 
-    console.log("   Your distributed SaaS database is now live on the Edge.\n");
+    console.log("   Your distributed SaaS database and Context Engine are now live on the Edge.\n");
 
     console.log("   🔑 YOUR CREDENTIALS (DO NOT SHARE):");
     console.log("   ────────────────────────────────────────────────────────");
@@ -258,7 +257,7 @@ async function run() {
     console.log("   🚀 NEXT STEPS:");
     console.log("   1. Open the UI Console link above in your browser.");
     console.log("   2. Paste your Router URL and API Key.");
-    console.log(`   3. Start querying your ${shardCandidates.length} shards globally!\n`);
+    console.log(`   3. Start querying your ${shardCandidates.length} shards globally and instantiating DOs!\n`);
 }
 
 run().catch(e => { console.error("\n❌ Fatal Error:", e.message); process.exit(1); });

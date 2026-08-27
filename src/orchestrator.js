@@ -1,14 +1,15 @@
 /**
- * LULAEDGE ORCHESTRATOR v1.8 - Data Plane, Query & WS Upgrades
+ * LULAEDGE ORCHESTRATOR v2.0 - Enterprise Snapshotting Edition
  * ─────────────────────────────────────────────────────────────────
  * THE SOLDIER: Ejecuta a ciegas los planes firmados por el Engine.
- * Intercepta 'create_do_result' para instanciar Durable Objects
- * mediante llamadas nativas RPC y delega persistencia a los Executors.
- * Incluye proxy CORS transparente para la estrategia live_sync.
+ * Intercepta 'create_do_result' para instanciar Durable Objects.
+ * Integra lógica de Snapshot Inteligente:
+ * 1. version_delta >= 100
+ * 2. time_delta >= 5 minutos
+ * 3. change_ratio >= 20%
  * ─────────────────────────────────────────────────────────────────
  */
 
-// 🌟 IMPORTANTE: Importamos la clase base para habilitar RPC nativo
 import { DurableObject } from "cloudflare:workers";
 
 const JWKS_CACHE = new Map();
@@ -29,13 +30,9 @@ async function verifySignature(plan, env) {
   }
 
   const data = {
-      strategy: plan.strategy,
-      target_table: plan.target_table,
-      cache_key: plan.cache_key,
-      phase_1: plan.phase_1,
-      phase_2: plan.phase_2,
-      assembly: plan.assembly,
-      do_payload: plan.do_payload
+      strategy: plan.strategy, target_table: plan.target_table,
+      cache_key: plan.cache_key, phase_1: plan.phase_1,
+      phase_2: plan.phase_2, assembly: plan.assembly, do_payload: plan.do_payload
   };
 
   const sigBytes = base64ToUint8(plan.signature);
@@ -65,16 +62,9 @@ async function callExecutor(env, binding, payload, timeoutMs) {
 
     const execMeta = body.successes?.[0]?.meta || body.meta || {};
     return {
-      success: true,
-      data: body.successes?.[0]?.data || [],
-      shard: payload.cat_id,
-      ms: Math.round(performance.now() - t0),
-      lat: execMeta.lat,
-      lon: execMeta.lon,
-      colo: execMeta.colo,
-      rows: execMeta.rows ?? payload.known_rows ?? 0,
-      rows_source: execMeta.rows_source ?? payload.known_source ?? 'exact',
-      health: execMeta.health || 100
+      success: true, data: body.successes?.[0]?.data || [], shard: payload.cat_id, ms: Math.round(performance.now() - t0),
+      lat: execMeta.lat, lon: execMeta.lon, colo: execMeta.colo, rows: execMeta.rows ?? payload.known_rows ?? 0,
+      rows_source: execMeta.rows_source ?? payload.known_source ?? 'exact', health: execMeta.health || 100
     };
   } catch (e) {
     clearTimeout(tid);
@@ -86,17 +76,9 @@ function assembleBlindly(action, phase1Data, phase2Results, masterMatch, shardMa
   const flatPhase2 = phase2Results.flatMap(r => r.data.map(d => ({ ...d, _shard: r.shard })));
 
   if (action === "concat") return flatPhase2;
-  if (action === "sum") {
-      let t = 0; flatPhase2.forEach(d => t += Number(d.val || 0)); return [{ val: t }];
-  }
-  if (action === "min") {
-      const values = flatPhase2.map(d => Number(d.val)).filter(v => !isNaN(v));
-      return [{ val: values.length ? Math.min(...values) : null }];
-  }
-  if (action === "max") {
-      const values = flatPhase2.map(d => Number(d.val)).filter(v => !isNaN(v));
-      return [{ val: values.length ? Math.max(...values) : null }];
-  }
+  if (action === "sum") { let t = 0; flatPhase2.forEach(d => t += Number(d.val || 0)); return [{ val: t }]; }
+  if (action === "min") { const values = flatPhase2.map(d => Number(d.val)).filter(v => !isNaN(v)); return [{ val: values.length ? Math.min(...values) : null }]; }
+  if (action === "max") { const values = flatPhase2.map(d => Number(d.val)).filter(v => !isNaN(v)); return [{ val: values.length ? Math.max(...values) : null }]; }
   if (action === "map_merge") {
       if (!phase1Data || !phase1Data.length) return [];
       return phase1Data.map(p1Row => {
@@ -107,10 +89,8 @@ function assembleBlindly(action, phase1Data, phase2Results, masterMatch, shardMa
   }
   if (action === "migration_summary") {
       return [{
-          total_shards_targeted: phase2Results.length,
-          success_count: phase2Results.filter(r => r.success).length,
-          fail_count: phase2Results.filter(r => !r.success).length,
-          failed_shards: phase2Results.filter(r => !r.success).map(r => r.shard),
+          total_shards_targeted: phase2Results.length, success_count: phase2Results.filter(r => r.success).length,
+          fail_count: phase2Results.filter(r => !r.success).length, failed_shards: phase2Results.filter(r => !r.success).map(r => r.shard),
           details: phase2Results.map(r => ({ shard: r.shard, status: r.success ? "OK" : "ERROR", error: r.err || null, latency_ms: r.ms }))
       }];
   }
@@ -126,7 +106,6 @@ function assembleBlindly(action, phase1Data, phase2Results, masterMatch, shardMa
 // ─── EL WORKER PRINCIPAL (ORCHESTRATOR) ───
 export default {
   async fetch(req, env, ctx) {
-    // 🌟 CORRECCIÓN CORS 1: Cabeceras extendidas y robustas
     const cors = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -136,7 +115,6 @@ export default {
 
     const clientGeo = { lat: req.cf?.latitude || null, lon: req.cf?.longitude || null, colo: req.cf?.colo || 'UNK', country: req.cf?.country || 'UNK' };
 
-    // ─── 🚀 NUEVO: INTERCEPTOR DE WEBSOCKETS PURO (Antes de leer el JSON) ───
     if (req.headers.get("Upgrade") === "websocket") {
         const stubId = new URL(req.url).searchParams.get("stub_id");
         if (!stubId || !env.CONTEXT_DO) return new Response("Missing stub_id or DO binding", { status: 400 });
@@ -146,13 +124,10 @@ export default {
 
     const sendLogAsync = (shardsHit, ms, planId, strategy, table) => {
       if (env.TRUSTED_ENGINE_URL) {
-        ctx.waitUntil(
-          fetch(`${env.TRUSTED_ENGINE_URL}/log`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-LulaEdge-Key": req.headers.get("X-LulaEdge-Key") || "" },
+        ctx.waitUntil(fetch(`${env.TRUSTED_ENGINE_URL}/log`, {
+            method: "POST", headers: { "Content-Type": "application/json", "X-LulaEdge-Key": req.headers.get("X-LulaEdge-Key") || "" },
             body: JSON.stringify({ s: shardsHit, t: ms, p: planId, st: strategy, tb: table })
-          }).catch(e => console.error("❌ LOG ERROR:", e.message))
-        );
+        }).catch(() => {}));
       }
     };
 
@@ -160,31 +135,22 @@ export default {
       const tStart = performance.now();
       const plan = await req.json();
 
-      // ─── VIA RÁPIDA: OPERACIONES DIRECTAS AL DURABLE OBJECT ───
       if (plan.strategy === "live_sync") {
           const stubId = plan.do_payload?.stub_id;
           if (!stubId) return new Response("BAD REQUEST: Missing stub_id", { status: 400, headers: cors });
           if (!env.CONTEXT_DO) return new Response("CONTEXT_DO binding not found", { status: 500, headers: cors });
 
-          // Obtenemos el acceso directo al DO en RAM
           const doId = env.CONTEXT_DO.idFromString(stubId);
           const doStub = env.CONTEXT_DO.get(doId);
 
-          // 🚀 NUEVO: Enrutamiento ampliado para Get, Patch y Query
           const action = plan.do_payload?.action || "get";
           const targetPath = action === "patch" ? "/patch" : action === "query" ? "/query" : "/get";
+          const bodyPayload = action === "patch" ? { patch: plan.do_payload.patch, version: plan.do_payload.version } : action === "query" ? { path: plan.do_payload.path } : null;
 
-          const bodyPayload = action === "patch" ? { patch: plan.do_payload.patch, version: plan.do_payload.version } :
-                              action === "query" ? { path: plan.do_payload.path } : null;
-
-          // Reenviamos la petición HTTP original internamente
           const internalReq = new Request(`http://internal${targetPath}`, {
-              method: req.method,
-              headers: req.headers,
-              body: bodyPayload ? JSON.stringify(bodyPayload) : null
+              method: req.method, headers: req.headers, body: bodyPayload ? JSON.stringify(bodyPayload) : null
           });
 
-          // 🌟 CORRECCIÓN CORS 2: Interceptamos e inyectamos CORS
           const doResponse = await doStub.fetch(internalReq);
           const corsResponse = new Response(doResponse.body, doResponse);
           Object.entries(cors).forEach(([k, v]) => corsResponse.headers.set(k, v));
@@ -192,7 +158,6 @@ export default {
           return corsResponse;
       }
 
-      // Para el resto de estrategias (Control Plane), exigimos la firma del Engine
       if (!(await verifySignature(plan, env))) return new Response("UNAUTHORIZED", { status: 401, headers: cors });
 
       const isLiveStrategy = ["discovery_summary", "mutation_result", "create_do_result", "live_sync"].includes(plan.assembly?.action || plan.strategy);
@@ -212,14 +177,11 @@ export default {
         }
       }
 
-      let phase1Data = [];
-      let phase1Keys = [];
+      let phase1Data = [], phase1Keys = [];
       if (plan.phase_1) {
         const res = await env.MASTER_DB.prepare(plan.phase_1.sql).bind(...(plan.phase_1.params || [])).all();
         phase1Data = res.results || [];
-        if (plan.phase_1.export_col) {
-            phase1Keys = phase1Data.map(r => r[plan.phase_1.export_col]).filter(k => k != null);
-        }
+        if (plan.phase_1.export_col) phase1Keys = phase1Data.map(r => r[plan.phase_1.export_col]).filter(k => k != null);
       }
 
       const executionPromises = (plan.phase_2 || []).map(async (instruction) => {
@@ -247,49 +209,35 @@ export default {
       const phase2Results = await Promise.all(executionPromises);
       let finalResult = [];
 
-      // ─── INTERCEPCIÓN DO: INSTANCIACIÓN EN DATA PLANE ───
       if (plan.assembly?.action === "create_do_result") {
-          // 1. Verificamos que el DDL en el Executor funcionó
-          if (phase2Results.length > 0 && !phase2Results[0].success) {
-              throw new Error("DDL Initialization Error via Executor: " + phase2Results[0].err);
-          }
+          if (phase2Results.length > 0 && !phase2Results[0].success) throw new Error("DDL Initialization Error via Executor: " + phase2Results[0].err);
+          if (!env.CONTEXT_DO) throw new Error("CONTEXT_DO binding not found in Orchestrator.");
 
-          if (!env.CONTEXT_DO) throw new Error("CONTEXT_DO binding not found in Orchestrator. Check wrangler.toml");
-
-          const { tenant_id, shard_binding, document, schema, metadata } = plan.do_payload;
+          const { tenant_id, shard_binding, document, schema, metadata, executor_binding } = plan.do_payload;
           const documentId = crypto.randomUUID();
 
-          // 2. Instanciamos el DO en memoria
           const doId = env.CONTEXT_DO.newUniqueId();
           const doStub = env.CONTEXT_DO.get(doId);
 
-          // 🌟 MAGIA RPC: Llamada directa como método de Javascript
-          const initRes = await doStub.initializeDocument({
-              documentId, tenantId: tenant_id, shardName: shard_binding, document, schema: schema || {}, metadata: metadata || {}
-          });
-
-          if (!initRes.success) throw new Error("DO Initialization Failed");
-
-          // 3. Persistencia remota vía Executor
-          // Extraemos el binding y el cat_id de forma segura por si el Engine omite la phase_2
-          const executorBinding = plan.phase_2?.[0]?.binding || plan.do_payload?.executor_binding || "EXEC_1";
+          const executorToUse = plan.phase_2?.[0]?.binding || executor_binding || "EXEC_1";
           const catId = plan.phase_2?.[0]?.cat_id || plan.do_payload?.cat_id || "lula-shard-default";
 
-          const now = Date.now();
+          const initRes = await doStub.initializeDocument({
+              documentId, tenantId: tenant_id, shardName: shard_binding, document, schema: schema || {}, metadata: metadata || {},
+              executorBinding: executorToUse, catId: catId
+          });
 
-          // 🚀 NUEVO: Insertamos el stub_id directamente en la base de datos
+          if (!initRes.success) throw new Error("DO Initialization Failed: " + (initRes.error || "Unknown"));
+
+          const now = Date.now();
           const insertPayload = {
-              sql: `INSERT INTO documents (document_id, tenant_id, stub_id, document, version, schema_json, metadata, created_at, updated_at, last_snapshot_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+              sql: `INSERT INTO documents (document_id, tenant_id, stub_id, document, version, schema_json, metadata, created_at, updated_at, last_snapshot_at, last_snapshot_version, accumulated_change_bytes) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 1, 0)`,
               params: [documentId, tenant_id, doId.toString(), JSON.stringify(document), JSON.stringify(schema || null), JSON.stringify(metadata || null), now, now, now],
-              d1_binding: shard_binding,
-              cat_id: catId,
-              is_migration: true
+              d1_binding: shard_binding, cat_id: catId, is_migration: true
           };
 
-          const persistResult = await callExecutor(env, executorBinding, insertPayload, 3000);
-          if (!persistResult.success) {
-             throw new Error("Persistence failed in Executor: " + persistResult.err);
-          }
+          const persistResult = await callExecutor(env, executorToUse, insertPayload, 3000);
+          if (!persistResult.success) throw new Error("Persistence failed in Executor: " + persistResult.err);
 
           finalResult = [{ documentId, DO_stub: doId.toString(), version: 1, status: "CREATED", shard_assigned: shard_binding }];
       } else {
@@ -326,12 +274,11 @@ export default {
 };
 
 // ─── EL DURABLE OBJECT (CONTEXT DO) ───
-// 🌟 Extendemos obligatoriamente de la clase base DurableObject
 export class ContextDO extends DurableObject {
   constructor(ctx, env) {
-    super(ctx, env); // 🌟 Obligatorio para inicializar la clase base
+    super(ctx, env);
     this.env = env;
-    this.storage = ctx.storage; // 🌟 ctx.storage reemplaza a state.storage
+    this.storage = ctx.storage;
     this.docState = null;
     this.initialized = false;
     this.metrics = { update_count: 0, active_subscriptions: 0, connection_peak: 0, last_activity: Date.now() };
@@ -342,18 +289,36 @@ export class ContextDO extends DurableObject {
     if (this.initialized) return;
     const stored = await this.storage.get(["docState", "metrics"]);
     this.docState = stored.get("docState") || null;
+
+    // Retrocompatibilidad segura si faltaban campos de snapshot
+    if (this.docState) {
+       this.docState.last_snapshot_version = this.docState.last_snapshot_version || this.docState.version || 1;
+       this.docState.last_snapshot_at = this.docState.last_snapshot_at || this.docState.updated_at || Date.now();
+       this.docState.accumulated_change_bytes = this.docState.accumulated_change_bytes || 0;
+    }
+
     if (stored.get("metrics")) this.metrics = { ...this.metrics, ...stored.get("metrics") };
     this.initialized = true;
   }
 
-  // 🌟 Como extendemos de DurableObject, este método está 100% disponible vía RPC
-  async initializeDocument({ documentId, tenantId, shardName, document, schema, metadata }) {
+  async initializeDocument({ documentId, tenantId, shardName, document, schema, metadata, executorBinding, catId }) {
     await this.ensureInitialized();
-    this.docState = {
+
+    const newState = {
       document_id: documentId, tenant_id: tenantId, shard_assigned: shardName,
+      executor_binding: executorBinding, cat_id: catId,
       data: document, schema: schema || {}, metadata: metadata || {},
-      version: 1, created_at: Date.now(), updated_at: Date.now()
+      version: 1, created_at: Date.now(), updated_at: Date.now(),
+
+      // 🛡️ Snapshot Tracking Init
+      last_snapshot_version: 1,
+      last_snapshot_at: Date.now(),
+      accumulated_change_bytes: 0
     };
+
+    if (JSON.stringify(newState).length > 100000) return { success: false, error: "DOCUMENT_SIZE_LIMIT_EXCEEDED" };
+
+    this.docState = newState;
     await this.storage.put({ "docState": this.docState, "metrics": this.metrics });
     return { success: true, document_id: documentId };
   }
@@ -370,7 +335,6 @@ export class ContextDO extends DurableObject {
       try { return await this.applyPatch(await request.json()); }
       catch (e) { return Response.json({ success: false, error: e.message }, { status: 400 }); }
     }
-    // 🚀 NUEVO: ENDPOINT QUERY PARA EXTRAER TROZOS DE RAM
     if (url.pathname === "/query" && request.method === "POST") {
         try {
             const { path } = await request.json();
@@ -386,18 +350,104 @@ export class ContextDO extends DurableObject {
 
   async applyPatch({ patch, version }) {
     if (!this.docState) return Response.json({ success: false, error: "DOCUMENT_NOT_INITIALIZED" }, { status: 400 });
-    // Permitimos que la version venga vacía para auto-incrementar de forma natural si el usuario no la manda
     if (version && version <= this.docState.version) return Response.json({ success: false, error: "VERSION_CONFLICT", current_version: this.docState.version }, { status: 409 });
 
-    this.docState.data = { ...this.docState.data, ...patch };
+    const patchSize = JSON.stringify(patch).length;
+    const nextData = { ...this.docState.data, ...patch };
+
+    if (JSON.stringify(nextData).length > 100000) return Response.json({ success: false, error: "PAYLOAD_TOO_LARGE_100KB_LIMIT" }, { status: 413 });
+
+    this.docState.data = nextData;
     this.docState.version = version || (this.docState.version + 1);
     this.docState.updated_at = Date.now();
+    this.docState.accumulated_change_bytes += patchSize; // 🛡️ Contabilizamos el peso del cambio
     this.metrics.update_count++;
 
     await this.storage.put({ "docState": this.docState, "metrics": this.metrics });
+
+    // ⏰ EL DESPERTADOR de 10s (Hot Update a la BD)
+    const currentAlarm = await this.storage.getAlarm();
+    if (!currentAlarm) await this.storage.setAlarm(Date.now() + 10000);
+
     this.broadcast({ event: "document_updated", version: this.docState.version, patch: patch, updated_by_patch: true });
 
     return Response.json({ success: true, version: this.docState.version, metrics: { ...this.metrics, active_subscriptions: this.sessions.size } });
+  }
+
+  // ⏰ LA FOTO FINAL: Sincronización a BD y lógica Snapshot
+  async alarm() {
+    await this.ensureInitialized();
+    if (!this.docState) return;
+
+    try {
+        const executorBinding = this.docState.executor_binding;
+        const shardBinding = this.docState.shard_assigned;
+        const catId = this.docState.cat_id;
+
+        if (!executorBinding || !shardBinding || !this.env[executorBinding]) {
+            console.error("Alarm failed: Missing Executor or Shard bindings in DO State.");
+            return;
+        }
+
+        const now = Date.now();
+        const service = this.env[executorBinding];
+
+        // ─── LÓGICA DE SNAPSHOTTING ENTERPRISE ───
+        const version_delta = this.docState.version - this.docState.last_snapshot_version;
+        const time_delta = now - this.docState.last_snapshot_at;
+        const doc_size = JSON.stringify(this.docState.data).length || 1;
+        const change_ratio = this.docState.accumulated_change_bytes / doc_size;
+
+        let snapshotReason = null;
+        if (version_delta >= 100) snapshotReason = "VERSION_DELTA";
+        else if (time_delta >= 300000) snapshotReason = "TIME_DELTA"; // 300000ms = 5 mins
+        else if (change_ratio >= 0.20) snapshotReason = "CHANGE_RATIO";
+
+        // Si se cumple alguna condición, reseteamos contadores y marcamos para histórico
+        let createHistoryEntry = false;
+        if (snapshotReason) {
+            this.docState.last_snapshot_version = this.docState.version;
+            this.docState.last_snapshot_at = now;
+            this.docState.accumulated_change_bytes = 0;
+            createHistoryEntry = true;
+            await this.storage.put({ "docState": this.docState }); // Persistir contadores reseteados
+        }
+
+        // 1. SIEMPRE hacemos el HOT UPDATE en la tabla 'documents' para tener el estado actual
+        const payloadUpdate = {
+            sql: "UPDATE documents SET document = ?, version = ?, updated_at = ?, last_snapshot_at = ?, last_snapshot_version = ?, accumulated_change_bytes = ? WHERE document_id = ?",
+            params: [JSON.stringify(this.docState.data), this.docState.version, this.docState.updated_at, this.docState.last_snapshot_at, this.docState.last_snapshot_version, this.docState.accumulated_change_bytes, this.docState.document_id],
+            d1_binding: shardBinding, cat_id: catId, is_migration: true
+        };
+
+        const execRes = await service.fetch("http://internal/query", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payloadUpdate)
+        });
+
+        if (!execRes.ok) {
+            await this.storage.setAlarm(Date.now() + 30000); // Reintento en 30s
+            return;
+        }
+
+        // 2. Si saltó la lógica de umbral, guardamos el Snapshot Histórico
+        if (createHistoryEntry) {
+            const payloadHistory = {
+                sql: "INSERT INTO document_history (document_id, version, document, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+                params: [this.docState.document_id, this.docState.version, JSON.stringify(this.docState.data), snapshotReason, now],
+                d1_binding: shardBinding, cat_id: catId, is_migration: true
+            };
+
+            await service.fetch("http://internal/query", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payloadHistory)
+            });
+            console.log(`Snapshot histórico generado por: ${snapshotReason}`);
+        }
+
+    } catch (e) {
+        console.error("Alarm error:", e);
+    }
   }
 
   handleWebSocketSubscription(request) {
