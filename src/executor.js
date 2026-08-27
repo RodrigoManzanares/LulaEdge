@@ -1,15 +1,19 @@
 /**
- * LULAEDGE EXECUTOR v1.2 - Telemetry
+ * LULAEDGE EXECUTOR v1.3 - The DDL Synchronicity Update
+ * ─────────────────────────────────────────────────────────────────
+ * THE MINION: Ejecuta las peticiones SQL finales en su D1 local.
+ * UPDATE: Si es is_migration, la introspección se fuerza de forma
+ * síncrona post-ejecución para evitar condiciones de carrera en el DDL.
  * ─────────────────────────────────────────────────────────────────
  */
 
 const introspectionCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-async function runIntrospection(db, catId) {
+async function runIntrospection(db, catId, ignoreCache = false) {
   const now = Date.now();
 
-  if (catId && introspectionCache.has(catId)) {
+  if (!ignoreCache && catId && introspectionCache.has(catId)) {
     const cached = introspectionCache.get(catId);
     if (now - cached.timestamp < CACHE_TTL_MS) {
       return {
@@ -124,9 +128,11 @@ export default {
       colo: req.cf?.colo || body.client_geo?.colo || "UNK"
     };
 
-    if (shouldIntrospect) {
-      const introspectPromise = runIntrospection(db, catId).then(schemaData => {
-        return fetch(`${env.ENGINE_URL || "https://api.lulaedge.com"}/update-schema`, {
+    // FUNCIÓN DE INTROSPECCIÓN (Envío asíncrono al Engine)
+    const triggerIntrospection = async (ignoreCache = false) => {
+      try {
+        const schemaData = await runIntrospection(db, catId, ignoreCache);
+        await fetch(`${env.ENGINE_URL || "https://api.lulaedge.com"}/update-schema`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -134,9 +140,14 @@ export default {
           },
           body: JSON.stringify({ cat_id: catId, schema: schemaData, geo: geoInfo })
         });
-      }).catch(e => console.error("Introspection Error:", e));
+      } catch (e) {
+        console.error("Introspection Error:", e);
+      }
+    };
 
-      ctx.waitUntil(introspectPromise);
+    // Si NO es migración, podemos lanzar la introspección asíncrona antes (Lecturas lentas no bloquean)
+    if (shouldIntrospect && !isMigration) {
+      ctx.waitUntil(triggerIntrospection(false));
     }
 
     try {
@@ -150,9 +161,19 @@ export default {
           execDuration = res.meta?.duration || 0;
         } catch (migErr) {
           const errMsg = (migErr.message || "").toLowerCase();
-          if (errMsg.includes("duplicate column name")) note = "Columna exist (Idempotent Success)";
-          else throw migErr;
+          if (errMsg.includes("duplicate column name") || errMsg.includes("table already exists")) {
+            note = "Idempotent Success (Entity exists)";
+          } else {
+            throw migErr;
+          }
         }
+
+        // ✨ LA MAGIA: Si era un DDL/Migración, forzamos la introspección síncrona DESPUÉS de ejecutarlo
+        // y saltándonos la caché local para obligarle a leer la nueva tabla.
+        if (shouldIntrospect) {
+          await triggerIntrospection(true);
+        }
+
       } else {
         const res = await db.prepare(sql).bind(...params).all();
         resultData = res.results || [];

@@ -1,37 +1,27 @@
 # LulaEdge
 
-**Query hundreds of Cloudflare D1 databases as if they were a single relational system**
+**Operational Truth for Agentic Systems**
 
-**LulaEdge orchestrates distributed SQL execution entirely inside your Cloudflare account using Cloudflare Workers**
+**Humans, agents, workflows and services now collaborate on the same operational entities**
 
 ---
 
 # Why LulaEdge?
 
-- Keep data geographically local
-- Query globally across shards
-- Avoid centralized Postgres infrastructure
-- Built entirely on Cloudflare Workers
-- Designed for multi-tenant and AI workloads
+- **Location Hint:** Keep data geographically local
+- **Agent Lineage:** Trace every decision across agents, humans, workflows and services
+- **Ownership:** Know who owns every operational decision
+- **Auditability:** Track every state change and every actor involved
+- **Shared State:** Humans and agents collaborate using the same operational truth
+- **Decision History:** Understand how an entity reached its current state
+- **Accountability:** Connect outcomes to the decisions that produced them
 ---
 ## How it works
 
-- **Engine** The LulaEdge engine only generates signed execution plans. Data queries execute entirely inside your Cloudflare account.
-- **Your cluster** (deployed by this script) --> Orchestrator + Executors live in your Cloudflare account. Only they talk to your D1 shards.
+**Not another database. Not another observability platform**
 
-```
-Your App → Engine (sign plan) → Orchestrator (execute) → Executors → D1 Shards
-```
+  LulaEdge sits above your existing systems. It becomes the operational layer where entities evolve, decisions are recorded, ownership is established and accountability becomes visible
 
-```
-sql
-SELECT region, SUM(revenue)
-FROM tenant_orders
-GROUP BY region
-```
-Execute across 100+ distributed D1 shards in parallel.
-
----
 
 ## Quick Start
 
@@ -89,6 +79,67 @@ Go to **[lulaedgeui.pages.dev](https://lulaedgeui.pages.dev)** and paste your or
 | `migrate`   | Add / Rename column across all shards                                            |
 | `telemetry` | Get global telemetry across all shards checking the Capacity, Status, Latency... |
 ---
+
+## Distributed Document Collaboration
+LulaEdge v2.1+ includes native support for Stateful Real-Time Documents. This allows multiple users (or AI Agents) to edit a JSON document concurrently with ultra-low latency, while LulaEdge automatically handles the underlying DDL and persistence to your distributed D1 shards via Enterprise Snapshotting.
+
+### 1. Create a Document
+To instantiate a new document, you request a signed plan from the Engine using the `create_document`   strategy. The Engine will automatically generate the DDL (`documents` and `document_history` tables) on the target D1 shard if they don't exist.
+
+Request to Engine:
+
+```bash
+{
+  "payload": {
+    "strategy": "create_document",
+    "target_shard": "eu-west-shard-1",
+    "tenant_id": "org_123",
+    "document": { "title": "My Shared Doc", "content": "..." },
+    "schema": { "type": "article" },
+    "metadata": { "author": "Alice" }
+  }
+}
+
+```
+The Orchestrator will execute the DDL and return a DO_stub (the unique ID of the Document).
+
+### 2. Live Sync & Concurrency
+
+Once created, you can interact with the Document Object via the Orchestrator using the live_sync strategy. The Document Object holds the hot state in RAM (< 5ms latency).
+
+Patching via HTTP:
+
+```bash
+{
+  "strategy": "live_sync",
+  "do_payload": {
+    "stub_id": "<DO_stub_id>",
+    "action": "patch",
+    "patch": { "content": "Updated content..." },
+    "version": null 
+  }
+}
+
+```
+Real-time WebSockets:
+For sub-millisecond collaboration, connect directly to the Orchestrator via WebSocket:
+
+```bash
+ws://your-orchestrator.workers.dev?stub_id=<DO_stub_id>
+```
+### 3. Enterprise Snapshotting (Hot/Cold Backup)
+You never have to worry about choking your D1 database with thousands of concurrent keystrokes.
+The LulaEdge Documents implements a Write-Behind Coalescing mechanism. It absorbs all parallel edits in RAM and flushes them to D1:
+
+* **Hot State:** Every 10 seconds of inactivity, it runs an UPDATE on the documents table.
+
+* **Cold History:** It generates an INSERT into document_history only when mathematically sensible:
+
+  * version_delta >= 100 (100+ edits)
+
+  * time_delta >= 5 mins
+
+  * change_ratio >= 20% (Document grew/changed significantly).
 
 ## Architecture
 
