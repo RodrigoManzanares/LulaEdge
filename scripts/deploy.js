@@ -1,5 +1,5 @@
 /**
- * LULAEDGE MAGIC SCRIPT v1.3 - The Fabric & DO Update
+ * LULAEDGE DEPLOY
  */
 "use strict";
 

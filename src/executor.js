@@ -1,11 +1,3 @@
-/**
- * LULAEDGE EXECUTOR v1.3 - The DDL Synchronicity Update
- * ─────────────────────────────────────────────────────────────────
- * THE MINION: Ejecuta las peticiones SQL finales en su D1 local.
- * UPDATE: Si es is_migration, la introspección se fuerza de forma
- * síncrona post-ejecución para evitar condiciones de carrera en el DDL.
- * ─────────────────────────────────────────────────────────────────
- */
 
 const introspectionCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -128,7 +120,7 @@ export default {
       colo: req.cf?.colo || body.client_geo?.colo || "UNK"
     };
 
-    // FUNCIÓN DE INTROSPECCIÓN (Envío asíncrono al Engine)
+
     const triggerIntrospection = async (ignoreCache = false) => {
       try {
         const schemaData = await runIntrospection(db, catId, ignoreCache);
@@ -145,7 +137,7 @@ export default {
       }
     };
 
-    // Si NO es migración, podemos lanzar la introspección asíncrona antes (Lecturas lentas no bloquean)
+
     if (shouldIntrospect && !isMigration) {
       ctx.waitUntil(triggerIntrospection(false));
     }
@@ -168,8 +160,7 @@ export default {
           }
         }
 
-        // ✨ LA MAGIA: Si era un DDL/Migración, forzamos la introspección síncrona DESPUÉS de ejecutarlo
-        // y saltándonos la caché local para obligarle a leer la nueva tabla.
+
         if (shouldIntrospect) {
           await triggerIntrospection(true);
         }

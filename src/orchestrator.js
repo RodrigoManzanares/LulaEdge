@@ -1,14 +1,4 @@
-/**
- * LULAEDGE ORCHESTRATOR v2.0 - Enterprise Snapshotting Edition
- * ─────────────────────────────────────────────────────────────────
- * THE SOLDIER: Ejecuta a ciegas los planes firmados por el Engine.
- * Intercepta 'create_do_result' para instanciar Durable Objects.
- * Integra lógica de Snapshot Inteligente:
- * 1. version_delta >= 100
- * 2. time_delta >= 5 minutos
- * 3. change_ratio >= 20%
- * ─────────────────────────────────────────────────────────────────
- */
+
 
 import { DurableObject } from "cloudflare:workers";
 
@@ -103,7 +93,6 @@ function assembleBlindly(action, phase1Data, phase2Results, masterMatch, shardMa
   return [];
 }
 
-// ─── EL WORKER PRINCIPAL (ORCHESTRATOR) ───
 export default {
   async fetch(req, env, ctx) {
     const cors = {
@@ -273,7 +262,6 @@ export default {
   }
 };
 
-// ─── EL DURABLE OBJECT (CONTEXT DO) ───
 export class ContextDO extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
@@ -290,7 +278,6 @@ export class ContextDO extends DurableObject {
     const stored = await this.storage.get(["docState", "metrics"]);
     this.docState = stored.get("docState") || null;
 
-    // Retrocompatibilidad segura si faltaban campos de snapshot
     if (this.docState) {
        this.docState.last_snapshot_version = this.docState.last_snapshot_version || this.docState.version || 1;
        this.docState.last_snapshot_at = this.docState.last_snapshot_at || this.docState.updated_at || Date.now();
@@ -310,7 +297,6 @@ export class ContextDO extends DurableObject {
       data: document, schema: schema || {}, metadata: metadata || {},
       version: 1, created_at: Date.now(), updated_at: Date.now(),
 
-      // 🛡️ Snapshot Tracking Init
       last_snapshot_version: 1,
       last_snapshot_at: Date.now(),
       accumulated_change_bytes: 0
@@ -360,12 +346,11 @@ export class ContextDO extends DurableObject {
     this.docState.data = nextData;
     this.docState.version = version || (this.docState.version + 1);
     this.docState.updated_at = Date.now();
-    this.docState.accumulated_change_bytes += patchSize; // 🛡️ Contabilizamos el peso del cambio
+    this.docState.accumulated_change_bytes += patchSize;
     this.metrics.update_count++;
 
     await this.storage.put({ "docState": this.docState, "metrics": this.metrics });
 
-    // ⏰ EL DESPERTADOR de 10s (Hot Update a la BD)
     const currentAlarm = await this.storage.getAlarm();
     if (!currentAlarm) await this.storage.setAlarm(Date.now() + 10000);
 
@@ -374,7 +359,6 @@ export class ContextDO extends DurableObject {
     return Response.json({ success: true, version: this.docState.version, metrics: { ...this.metrics, active_subscriptions: this.sessions.size } });
   }
 
-  // ⏰ LA FOTO FINAL: Sincronización a BD y lógica Snapshot
   async alarm() {
     await this.ensureInitialized();
     if (!this.docState) return;
@@ -392,7 +376,7 @@ export class ContextDO extends DurableObject {
         const now = Date.now();
         const service = this.env[executorBinding];
 
-        // ─── LÓGICA DE SNAPSHOTTING ENTERPRISE ───
+
         const version_delta = this.docState.version - this.docState.last_snapshot_version;
         const time_delta = now - this.docState.last_snapshot_at;
         const doc_size = JSON.stringify(this.docState.data).length || 1;
@@ -400,20 +384,20 @@ export class ContextDO extends DurableObject {
 
         let snapshotReason = null;
         if (version_delta >= 100) snapshotReason = "VERSION_DELTA";
-        else if (time_delta >= 300000) snapshotReason = "TIME_DELTA"; // 300000ms = 5 mins
+        else if (time_delta >= 300000) snapshotReason = "TIME_DELTA";
         else if (change_ratio >= 0.20) snapshotReason = "CHANGE_RATIO";
 
-        // Si se cumple alguna condición, reseteamos contadores y marcamos para histórico
+
         let createHistoryEntry = false;
         if (snapshotReason) {
             this.docState.last_snapshot_version = this.docState.version;
             this.docState.last_snapshot_at = now;
             this.docState.accumulated_change_bytes = 0;
             createHistoryEntry = true;
-            await this.storage.put({ "docState": this.docState }); // Persistir contadores reseteados
+            await this.storage.put({ "docState": this.docState });
         }
 
-        // 1. SIEMPRE hacemos el HOT UPDATE en la tabla 'documents' para tener el estado actual
+
         const payloadUpdate = {
             sql: "UPDATE documents SET document = ?, version = ?, updated_at = ?, last_snapshot_at = ?, last_snapshot_version = ?, accumulated_change_bytes = ? WHERE document_id = ?",
             params: [JSON.stringify(this.docState.data), this.docState.version, this.docState.updated_at, this.docState.last_snapshot_at, this.docState.last_snapshot_version, this.docState.accumulated_change_bytes, this.docState.document_id],
@@ -426,11 +410,11 @@ export class ContextDO extends DurableObject {
         });
 
         if (!execRes.ok) {
-            await this.storage.setAlarm(Date.now() + 30000); // Reintento en 30s
+            await this.storage.setAlarm(Date.now() + 30000);
             return;
         }
 
-        // 2. Si saltó la lógica de umbral, guardamos el Snapshot Histórico
+
         if (createHistoryEntry) {
             const payloadHistory = {
                 sql: "INSERT INTO document_history (document_id, version, document, reason, created_at) VALUES (?, ?, ?, ?, ?)",
